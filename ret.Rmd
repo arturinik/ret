@@ -1,0 +1,268 @@
+---
+title: "A2R2"
+output: html_notebook
+---
+
+```{r setup, include=FALSE, warning=FALSE, message=FALSE}
+```
+
+```{r}
+install.packages("tidyverse")
+```
+
+```{r}
+library(tidyverse)
+library(tidyquant)
+library(timetk)
+library(tibbletime)
+library(scales)
+library(highcharter)
+library(broom)
+library(PerformanceAnalytics)
+```
+
+
+```{r}
+symbols <- c("^GSPC", "^IRX")
+
+
+prices <-
+  tq_get(symbols,
+         get = "stock.prices",
+         from = "1990-01-01")
+
+head(prices)
+```
+
+```{r}
+library(highcharter)
+prices%>%
+  filter(symbol == "^GSPC") %>%
+  hchart(.,
+         hcaes(x = date, y = adjusted),
+         type = "line") %>%
+  hc_title(text = "GSPC prices")
+```
+
+
+```{r}
+
+returns <- prices %>%
+  select(symbol, date, adjusted) %>%
+  spread(symbol, adjusted) %>%
+  rename(sp500 = "^GSPC", treas = "^IRX") %>%
+  
+  mutate(sp500_returns = log(sp500) - log(lag(sp500)),
+         daily_treas = (1+ (treas/100)) ^ (1/252)-1)
+
+head(returns)
+```
+
+```{r}
+returns %>%
+  tq_performance(Ra =sp500_returns,
+                 performance_fun = table.Stats) %>%
+  
+  t()%>%
+  knitr::kable()
+```
+
+```{r}
+prices %>%
+  select(symbol, date, adjusted) %>%
+  spread(symbol, adjusted) %>%
+  rename(sp500 = "^GSPC", treas = "^IRX") %>%
+  mutate(sp500_returns = log(sp500) - log(lag(sp500))) %>%
+  ggplot(aes(x = date, y = sp500_returns)) + 
+  geom_point(color = "cornflowerblue") +
+  scale_x_date(breaks = pretty_breaks(n = 30)) + 
+  labs(title = "sp500 daily returns",
+       y = "daily percent") +
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+```{r}
+
+roll_mean_50 <-
+  rollify(mean, window = 50)
+
+roll_mean_200 <-
+  rollify(mean, window = 200)
+```
+
+```{r}
+prices %>%
+  select(symbol, date, adjusted) %>%
+  spread(symbol, adjusted) %>%
+  rename(sp500 = "^GSPC", treas = "^IRX") %>%
+  mutate(sma_200 = roll_mean_200(sp500),
+         sma_50 = roll_mean_50(sp500)) %>%
+  na.omit() %>%
+  tail(5)
+```
+
+```{r}
+prices %>%
+  select(symbol, date, adjusted) %>%
+  spread(symbol, adjusted) %>%
+  rename(sp500 = "^GSPC", treas = "^IRX") %>%
+  mutate(sp500_returns = log(sp500) - log(lag(sp500)),
+         daily_treas = (1 + (treas/100)) ^ (1/252) - 1,
+         sma_200 = roll_mean_200(sp500),
+         sma_50 = roll_mean_50(sp500)) %>%
+  na.omit() %>%
+  mutate(signal = if_else(sma_50 > sma_200, 1, 0)) %>%
+  select(date, signal, sma_50, sma_200) %>%
+  filter(signal == 1)
+```
+
+```{r}
+prices %>%
+  select(symbol, date, adjusted) %>%
+  spread(symbol, adjusted) %>%
+  rename(sp500 = "^GSPC", treas = "^IRX") %>%
+  mutate(sp500_returns = log(sp500) - log(lag(sp500)),
+         daily_treas = (1 + (treas/100)) ^ (1/252) - 1,
+         sma_200 = roll_mean_200(sp500),
+         sma_50 = roll_mean_50(sp500)) %>%
+  na.omit() %>%
+  mutate(signal = if_else(sma_50 > sma_200, 1, 0),
+         trend_returns = if_else(lag(signal) == 1, (signal * sp500_returns), daily_treas))%>%
+  select(-treas, -sp500)
+```
+
+```{r}
+prices %>%
+  select(symbol, date, adjusted) %>%
+  spread(symbol, adjusted) %>%
+  rename(sp500 = "^GSPC", treas = "^IRX") %>%
+  mutate(
+    sp500_returns = log(sp500) - log(lag(sp500)),
+    daily_treas = (1 + (treas/100)) ^ (1/252) - 1,
+    sma_200 = roll_mean_200(sp500),
+    sma_50 = roll_mean_50(sp500)) %>%
+  na.omit() %>%
+  mutate(signal = if_else(sma_50 > sma_200, 1, 0),
+         buy_hold_returns = (.9 * sp500_returns) + (.1 * daily_treas),
+         trend_returns = if_else(lag(signal)  == 1, (signal * sp500_returns),
+                                 daily_treas)) %>%
+  select(date, trend_returns, buy_hold_returns) %>%
+  na.omit()
+  
+```
+```{r}
+sma_trend_results <- 
+prices %>% 
+  select(symbol, date, adjusted) %>% 
+  spread(symbol, adjusted) %>%
+  rename(sp500 = `^GSPC`, treas = `^IRX`) %>% 
+  mutate(sma_200 = roll_mean_200(sp500),
+         sma_50 = roll_mean_50(sp500),
+         signal = if_else(sma_50 > sma_200, 1, 0),
+         sp500_returns = log(sp500) - log(lag(sp500)), 
+         daily_treas = (1 + (treas/100)) ^ (1/252) - 1,
+         buy_hold_returns = (.9 * sp500_returns) + (.1 * daily_treas),
+         trend_returns = if_else(lag(signal) == 1, (signal * sp500_returns), daily_treas)
+         ) %>%
+  na.omit() %>% 
+  mutate(trend_growth = accumulate(1 + trend_returns, `*`),
+         buy_hold_growth = accumulate(1 + buy_hold_returns, `*`))
+sma_trend_results %>% tail()
+```
+```{r}
+
+sma_trend_results %>%
+  select(date, trend_growth, buy_hold_growth) %>% 
+  gather(strategy, growth, -date) %>%
+  hchart(., hcaes(x = date, y = growth, group = strategy),
+         type = "line") %>% 
+  hc_tooltip(pointFormat = "{point.strategy}: ${point.growth: .2f}")
+
+```
+```{r}
+
+sma_trend_results %>%
+  select(date, trend_returns, buy_hold_returns) %>%
+  gather(strategy, returns, -date) %>%
+  group_by(strategy) %>% 
+  tq_performance(Ra = returns, 
+                 performance_fun = table.Stats) %>% 
+  t() %>% 
+  knitr::kable()
+
+```
+
+```{r}
+trend_z_results <- 
+prices %>% 
+  select(symbol, date, adjusted) %>% 
+  spread(symbol, adjusted) %>%
+  rename(sp500 = `^GSPC`, treas = `^IRX`) %>% 
+  mutate(sma_200 = roll_mean_200(sp500),
+         sma_50 = roll_mean_50(sp500),
+         sp500_returns = log(sp500) - log(lag(sp500)),
+         daily_treas = (1 + (treas/100)) ^ (1/252) - 1) %>% 
+  na.omit() %>% 
+  mutate(trend_signal = if_else(sma_50 > sma_200, 1, 0),
+         z_spread = (sp500 - sma_200),
+         z_score = (z_spread - mean(z_spread))/sd(z_spread),
+         z_signal = if_else(
+                            lag(z_score, 1) < -.05 & 
+                            lag(z_score, 2) < -.05 &
+                            lag(z_score, 3) < -.05, 
+                            0, 1),
+         trend_z_returns = if_else(lag(trend_signal) == 1 &
+                                 z_signal == 1, 
+                                 (trend_signal * sp500_returns), daily_treas),
+         trend_returns =  if_else(lag(trend_signal) == 1,
+                                 (trend_signal * sp500_returns), daily_treas),
+         buy_hold_returns = (.9 * sp500_returns) + (.1 * daily_treas)) %>% 
+  select(date, trend_signal, z_signal, buy_hold_returns, trend_returns, trend_z_returns, daily_treas) %>%
+  na.omit() %>% 
+  mutate(
+         trend_growth = accumulate(1 + trend_returns, `*`),
+         trend_z_growth = accumulate(1 + trend_z_returns, `*`),
+         buy_hold_growth = accumulate(1 + buy_hold_returns, `*`))
+
+trend_z_results %>% tail()
+```
+```{r}
+
+trend_z_results %>%
+  select(date, trend_growth, trend_z_growth, buy_hold_growth, daily_treas) %>% 
+  gather(strategy, growth, -date, -daily_treas) %>% 
+  hchart(., hcaes(x = date, y = growth, group = strategy), type = "line") %>% 
+  hc_tooltip(pointFormat = "{point.strategy}: ${point.growth: .2f}")
+```
+
+```{r}
+trend_z_results %>%
+  select(date, trend_returns, trend_z_growth, buy_hold_returns) %>%
+  gather(strategy, returns, -date) %>%
+  group_by(strategy) %>% 
+  tq_performance(Ra = returns, 
+                 performance_fun = table.Stats) %>% 
+  t() %>% 
+  knitr::kable()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
